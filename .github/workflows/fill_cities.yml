@@ -1,0 +1,83 @@
+name: Fill Company Cities
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_number:
+        description: "Batch number (0 = first 39,600 EIKs, 1 = next 39,600, etc.)"
+        required: true
+        default: "0"
+        type: string
+
+jobs:
+  process:
+    name: "Worker ${{ matrix.worker }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 350       # 5h 50min — leaves buffer before 6h GitHub limit
+    strategy:
+      fail-fast: false          # keep other workers running if one fails
+      matrix:
+        worker: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run worker
+        run: |
+          python worker.py ${{ matrix.worker }} 20 ${{ inputs.batch_number }}
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()            # upload even if worker hits timeout
+        with:
+          name: results-worker-${{ matrix.worker }}
+          path: results_${{ matrix.worker }}.json
+          retention-days: 30
+
+  summary:
+    name: "Summary"
+    runs-on: ubuntu-latest
+    needs: process
+    if: always()
+
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-worker-*
+          merge-multiple: true
+          path: all_results
+
+      - name: Merge and summarise
+        run: |
+          python3 - <<'EOF'
+          import json, glob, os
+
+          city_map = {}
+          for f in sorted(glob.glob("all_results/results_*.json")):
+              with open(f) as fh:
+                  data = json.load(fh)
+              city_map.update(data)
+              print(f"{os.path.basename(f)}: {len(data):,} cities")
+
+          out = "all_results/all_cities.json"
+          with open(out, "w", encoding="utf-8") as fh:
+              json.dump(city_map, fh, ensure_ascii=False)
+          print(f"\nTotal: {len(city_map):,} cities merged → {out}")
+          EOF
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        with:
+          name: all_cities_batch_${{ inputs.batch_number }}
+          path: all_results/all_cities.json
+          retention-days: 30
