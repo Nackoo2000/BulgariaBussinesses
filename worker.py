@@ -2,18 +2,18 @@
 GitHub Actions worker — runs as one job in a matrix.
 Usage: python worker.py <worker_index> <total_workers> <batch_number>
   worker_index  : 0-based index of this worker (0 to total_workers-1)
-  total_workers : how many parallel workers in this run (e.g. 20)
+  total_workers : how many parallel workers in this run (e.g. 100)
   batch_number  : which batch of the full list to process (0, 1, 2, ...)
 
 Each run covers: total_workers * MAX_PER_WORKER EIKs
-Each worker runs for up to 5.5 hours at 1 req / 10s = 1,980 EIKs per worker per run.
+Each worker runs for ~1 hour at 1 req / 10s = 360 EIKs per worker per run.
 """
 
 import sys, os, json, time, requests
 
-INTER_REQ_S   = 10       # seconds between requests (safe: 6 per 60s)
-MAX_PER_WORKER = 1980    # 5.5 hours × 360/hr — stays under the 6h GitHub limit
-REQ_TIMEOUT   = 20
+INTER_REQ_S    = 10      # seconds between requests (safe: 6 per 60s)
+MAX_PER_WORKER = 360     # 1 hour × 360/hr — short batches for fast feedback
+REQ_TIMEOUT    = 20
 
 SEAT_URL = "https://portal.registryagency.bg/CR/api/Deeds/{eik}/Seat"
 

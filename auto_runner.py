@@ -26,9 +26,9 @@ DONE_FILE    = os.path.join(BASE_DIR, "epzeu_done.json")
 MISSING_FILE = os.path.join(GH_DIR, "missing_eiks.txt")
 STATE_FILE   = os.path.join(GH_DIR, "runner_state.json")
 
-POLL_INTERVAL   = 120    # seconds between run status checks
-MAX_WAIT_HOURS  = 7      # max hours to wait for a batch before giving up
-TOTAL_BATCHES   = 15     # 0 through 14
+POLL_INTERVAL   = 60     # seconds between run status checks
+MAX_WAIT_HOURS  = 2      # max hours to wait for a batch (1h work + 1h buffer)
+TOTAL_BATCHES   = 20     # safe upper bound — pipeline stops early when list is empty
 
 API = "https://api.github.com"
 HEADERS = {
