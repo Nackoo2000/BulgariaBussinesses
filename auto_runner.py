@@ -1,34 +1,39 @@
 """
-Automated pipeline runner.
-- Polls GitHub for the current batch to complete
-- Downloads the artifact (all_cities.json)
-- Merges cities into commercial_register_final.csv
-- Pushes updated missing_eiks.txt to GitHub
-- Triggers the next batch
-- Repeats until all companies have a city
+Automated pipeline runner — EPZEU via GitHub Actions.
 
-Usage: python auto_runner.py
+Rules:
+  - Batch runs for 15 min (90 EIKs × 20 workers = 1,800 EIKs per batch)
+  - After each batch:
+      * 0 cities found        → STOP and notify (something is broken)
+      * success rate > 90%    → auto-start next batch
+      * success rate <= 90%   → STOP and notify (investigate before continuing)
 """
-import sys, os, json, time, csv, glob, zipfile, io, subprocess, requests
+import sys, os, json, time, csv, glob, zipfile, io, subprocess, requests, math
 
 sys.stdout.reconfigure(encoding='utf-8', write_through=True)
 
-# ── Config ─────────────────────────────────────────────────────────────────
-GITHUB_TOKEN = "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"
-REPO         = "Nackoo2000/BulgariaBussinesses"
-WORKFLOW     = "fill_cities.yml"
-BRANCH       = "main"
+TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh_token.txt")
+with open(TOKEN_FILE) as f:
+    GITHUB_TOKEN = f.read().strip()
 
-BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GH_DIR       = os.path.dirname(os.path.abspath(__file__))
-CSV_FILE     = os.path.join(BASE_DIR, "commercial_register_final.csv")
-DONE_FILE    = os.path.join(BASE_DIR, "epzeu_done.json")
-MISSING_FILE = os.path.join(GH_DIR, "missing_eiks.txt")
-STATE_FILE   = os.path.join(GH_DIR, "runner_state.json")
+REPO            = "Nackoo2000/BulgariaBussinesses"
+WORKFLOW        = "fill_cities.yml"
+BRANCH          = "main"
 
-POLL_INTERVAL   = 60     # seconds between run status checks
-MAX_WAIT_HOURS  = 2      # max hours to wait for a batch (1h work + 1h buffer)
-TOTAL_BATCHES   = 20     # safe upper bound — pipeline stops early when list is empty
+BASE_DIR        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GH_DIR          = os.path.dirname(os.path.abspath(__file__))
+CSV_FILE        = os.path.join(BASE_DIR, "commercial_register_final.csv")
+DONE_FILE       = os.path.join(BASE_DIR, "epzeu_done.json")
+MISSING_FILE    = os.path.join(GH_DIR, "missing_eiks.txt")
+STATE_FILE      = os.path.join(GH_DIR, "runner_state.json")
+
+POLL_INTERVAL   = 60       # seconds between status checks
+MAX_WAIT_HOURS  = 1        # max wait per batch before timeout
+TOTAL_BATCHES   = 300      # safe upper bound
+WORKERS         = 20
+MAX_PER_WORKER  = 90       # must match worker.py
+EIKS_PER_BATCH  = WORKERS * MAX_PER_WORKER   # 1,800
+SUCCESS_THRESH  = 0.90     # auto-continue only if >= 90% of EIKs got a city
 
 API = "https://api.github.com"
 HEADERS = {
@@ -36,6 +41,25 @@ HEADERS = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+
+# ── Windows notification ────────────────────────────────────────────────────
+
+def notify(title, message):
+    t = title.replace("'", "`'")
+    m = message.replace("'", "`'")
+    ps = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$n = New-Object System.Windows.Forms.NotifyIcon
+$n.Icon = [System.Drawing.SystemIcons]::Information
+$n.Visible = $true
+$n.ShowBalloonTip(8000, '{t}', '{m}', [System.Windows.Forms.ToolTipIcon]::Info)
+Start-Sleep -Seconds 9
+$n.Dispose()
+"""
+    subprocess.Popen(
+        ["powershell", "-WindowStyle", "Hidden", "-Command", ps],
+        creationflags=0x08000000,
+    )
 
 # ── State ──────────────────────────────────────────────────────────────────
 
@@ -49,7 +73,7 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
-# ── GitHub API helpers ─────────────────────────────────────────────────────
+# ── GitHub API ─────────────────────────────────────────────────────────────
 
 def api_get(path):
     r = requests.get(f"{API}{path}", headers=HEADERS, timeout=30)
@@ -73,38 +97,33 @@ def get_latest_run_id():
 def wait_for_run(run_id):
     deadline = time.time() + MAX_WAIT_HOURS * 3600
     while time.time() < deadline:
-        data = api_get(f"/repos/{REPO}/actions/runs/{run_id}")
+        data       = api_get(f"/repos/{REPO}/actions/runs/{run_id}")
         status     = data["status"]
         conclusion = data.get("conclusion")
-        print(f"  Run {run_id}: status={status} conclusion={conclusion}", flush=True)
+        print(f"  Run {run_id}: {status} / {conclusion}", flush=True)
         if status == "completed":
             return conclusion
         time.sleep(POLL_INTERVAL)
-    print(f"  Timeout waiting for run {run_id}", flush=True)
     return "timeout"
 
 def download_artifact(run_id, batch_number):
-    """Download all_cities_batch_N artifact and return the city map dict."""
-    data = api_get(f"/repos/{REPO}/actions/runs/{run_id}/artifacts")
+    data      = api_get(f"/repos/{REPO}/actions/runs/{run_id}/artifacts")
     artifacts = data.get("artifacts", [])
 
-    # Find merged artifact first, fall back to individual worker results
     target = f"all_cities_batch_{batch_number}"
-    art = next((a for a in artifacts if a["name"] == target), None)
-    if not art:
-        # Try to merge from individual worker artifacts
-        print(f"  No merged artifact '{target}', collecting worker artifacts...", flush=True)
-        city_map = {}
-        for a in artifacts:
-            if a["name"].startswith("results-worker-"):
-                worker_map = download_single_artifact(a["archive_download_url"])
-                city_map.update(worker_map)
-        return city_map
+    art    = next((a for a in artifacts if a["name"] == target), None)
+    if art:
+        return fetch_zip(art["archive_download_url"])
 
-    return download_single_artifact(art["archive_download_url"])
+    # Fall back to individual worker artifacts
+    print("  No merged artifact — collecting worker artifacts...", flush=True)
+    city_map = {}
+    for a in artifacts:
+        if a["name"].startswith("results-worker-"):
+            city_map.update(fetch_zip(a["archive_download_url"]))
+    return city_map
 
-def download_single_artifact(url):
-    """Download a ZIP artifact and extract JSON city maps."""
+def fetch_zip(url):
     r = requests.get(url, headers=HEADERS, timeout=120)
     r.raise_for_status()
     city_map = {}
@@ -125,7 +144,7 @@ def download_single_artifact(url):
 def load_csv():
     companies, fieldnames = {}, None
     with open(CSV_FILE, encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
+        reader     = csv.DictReader(f)
         fieldnames = reader.fieldnames
         for row in reader:
             companies[row["EIK"]] = row
@@ -156,7 +175,6 @@ def update_done(city_map):
     done.update(city_map.keys())
     with open(DONE_FILE, "w") as f:
         json.dump(list(done), f)
-    return done
 
 def regenerate_missing():
     done = set()
@@ -172,124 +190,133 @@ def regenerate_missing():
         f.write("\n".join(missing))
     return len(missing)
 
-def git_push_updated_list():
-    """Commit and push the updated missing_eiks.txt."""
-    cmds = [
+def git_push():
+    for cmd in [
         ["git", "-C", GH_DIR, "add", "missing_eiks.txt", "runner_state.json"],
-        ["git", "-C", GH_DIR, "commit", "-m", "Update missing_eiks.txt after batch merge"],
+        ["git", "-C", GH_DIR, "commit", "-m", "Update after batch merge"],
         ["git", "-C", GH_DIR, "push"],
-    ]
-    for cmd in cmds:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0 and "nothing to commit" not in result.stdout:
-            print(f"  git warning: {result.stderr.strip()[:200]}", flush=True)
+    ]:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 and "nothing to commit" not in r.stdout:
+            print(f"  git: {r.stderr.strip()[:150]}", flush=True)
 
-# ── Main loop ──────────────────────────────────────────────────────────────
+def eta_string(still_missing):
+    batches_left = math.ceil(still_missing / EIKS_PER_BATCH)
+    mins         = batches_left * 20   # ~20 min per batch (15 work + 5 overhead)
+    if mins < 60:
+        return f"{mins}min"
+    return f"{mins/60:.1f}h"
+
+# ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
     state = load_state()
-    print("=" * 60)
-    print("AUTO RUNNER — GitHub Actions batch pipeline")
-    print("=" * 60)
-    print(f"Starting at batch {state['next_batch']} / {TOTAL_BATCHES - 1}", flush=True)
+    print("=" * 60, flush=True)
+    print("AUTO RUNNER — 15-min EPZEU batches", flush=True)
+    print(f"Starting at batch {state['next_batch']}", flush=True)
+    print("Stop rules: 0 cities found OR success rate < 90%", flush=True)
+    print("=" * 60, flush=True)
 
     while state["next_batch"] < TOTAL_BATCHES:
         batch = state["next_batch"]
-        print(f"\n{'='*50}")
-        print(f"BATCH {batch}/{TOTAL_BATCHES - 1}", flush=True)
+        print(f"\n{'='*50}", flush=True)
+        print(f"BATCH {batch}", flush=True)
 
-        # Check stats
         companies, fieldnames = load_csv()
-        total = len(companies)
-        with_city = sum(1 for r in companies.values() if r.get("Registered Address", "").strip())
+        total         = len(companies)
+        with_city     = sum(1 for r in companies.values() if r.get("Registered Address", "").strip())
         missing_count = total - with_city
-        print(f"Current: {with_city:,} with city | {missing_count:,} missing ({missing_count/total*100:.1f}%)", flush=True)
+        print(f"Before: {with_city:,} with city | {missing_count:,} missing", flush=True)
 
         if missing_count == 0:
-            print("All companies have a city! Done.", flush=True)
+            notify("Bulgaria Data — COMPLETE", "All companies have a city!")
+            print("All done!", flush=True)
             break
 
-        # If there's already a running batch, get its run ID
+        # Trigger
         run_id = state.get("last_run_id")
-
         if not run_id:
-            # Trigger new batch
             print(f"Triggering batch {batch}...", flush=True)
-            ok = trigger_workflow(batch)
-            if not ok:
-                print("Failed to trigger workflow, retrying in 60s...", flush=True)
+            if not trigger_workflow(batch):
                 time.sleep(60)
-                ok = trigger_workflow(batch)
-                if not ok:
-                    print("ERROR: Could not trigger workflow. Stopping.", flush=True)
+                if not trigger_workflow(batch):
+                    notify("Bulgaria Data — ERROR", "Could not trigger workflow.")
                     return
-
-            time.sleep(15)  # wait for GitHub to register the run
+            time.sleep(15)
             run_id = get_latest_run_id()
-            print(f"Run ID: {run_id} | https://github.com/{REPO}/actions/runs/{run_id}", flush=True)
+            print(f"Run: {run_id} → https://github.com/{REPO}/actions/runs/{run_id}", flush=True)
             state["last_run_id"] = run_id
             save_state(state)
 
-        # Wait for completion
-        print(f"Waiting for run {run_id} to complete (polling every {POLL_INTERVAL}s)...", flush=True)
         conclusion = wait_for_run(run_id)
-        print(f"Run completed: {conclusion}", flush=True)
+        print(f"Conclusion: {conclusion}", flush=True)
 
-        if conclusion in ("success", "failure", "partial"):
-            # Download artifacts and merge (even on partial failure — some workers may have succeeded)
-            print("Downloading artifacts...", flush=True)
-            try:
-                city_map = download_artifact(run_id, batch)
-                print(f"Downloaded {len(city_map):,} cities from batch {batch}", flush=True)
+        if conclusion == "cancelled":
+            print("Run was cancelled — stopping.", flush=True)
+            notify("Bulgaria Data — STOPPED", f"Batch {batch} was cancelled. Start again when ready.")
+            return
 
-                if city_map:
-                    companies, fieldnames = load_csv()
-                    applied = apply_cities(companies, city_map)
-                    save_csv(companies, fieldnames)
-                    update_done(city_map)
-                    print(f"Applied {applied:,} new cities to CSV", flush=True)
+        if conclusion == "timeout":
+            notify("Bulgaria Data — TIMEOUT", f"Batch {batch} timed out. Check GitHub.")
+            state["next_batch"] = batch + 1
+            state["last_run_id"] = None
+            save_state(state)
+            return
 
-                    # Regenerate missing list for next batch
-                    still_missing = regenerate_missing()
-                    print(f"Still missing after merge: {still_missing:,}", flush=True)
+        # Download & merge
+        try:
+            city_map = download_artifact(run_id, batch)
+        except Exception as e:
+            print(f"ERROR downloading artifacts: {e}", flush=True)
+            notify("Bulgaria Data — ERROR", f"Batch {batch}: could not download artifact.")
+            return
 
-                    if still_missing == 0:
-                        print("\nALL DONE! Every company has a city.", flush=True)
-                        state["next_batch"] = TOTAL_BATCHES
-                        save_state(state)
-                        break
+        cities_found  = len(city_map)
+        eiks_attempted = min(EIKS_PER_BATCH, missing_count)
+        success_rate  = cities_found / eiks_attempted if eiks_attempted > 0 else 0
 
-                    # Push updated list to GitHub
-                    git_push_updated_list()
+        print(f"Cities found: {cities_found:,} / {eiks_attempted:,} ({success_rate*100:.1f}%)", flush=True)
 
-            except Exception as e:
-                print(f"ERROR downloading/merging: {e}", flush=True)
+        if cities_found == 0:
+            notify(
+                "Bulgaria Data — STOPPED",
+                f"Batch {batch}: 0 cities found. Something is broken — check workers."
+            )
+            print("STOPPING: 0 cities found.", flush=True)
+            return
 
-        elif conclusion == "timeout":
-            print(f"Batch {batch} timed out — continuing to next batch anyway", flush=True)
+        # Apply to CSV
+        companies, fieldnames = load_csv()
+        applied = apply_cities(companies, city_map)
+        save_csv(companies, fieldnames)
+        update_done(city_map)
+        still_missing = regenerate_missing()
 
-        # Advance to next batch
+        print(f"Applied {applied:,} cities. Still missing: {still_missing:,}", flush=True)
+
         state["next_batch"] = batch + 1
         state["last_run_id"] = None
         save_state(state)
 
-        # Print updated stats
-        companies, _ = load_csv()
-        with_city = sum(1 for r in companies.values() if r.get("Registered Address", "").strip())
-        total = len(companies)
-        print(f"\nProgress: {with_city:,}/{total:,} ({with_city/total*100:.1f}%) have city", flush=True)
+        eta = eta_string(still_missing)
 
-    # Final report
-    companies, _ = load_csv()
-    total     = len(companies)
-    with_city = sum(1 for r in companies.values() if r.get("Registered Address", "").strip())
-    print(f"\n{'='*60}")
-    print(f"PIPELINE COMPLETE")
-    print(f"{'='*60}")
-    print(f"Total companies : {total:,}")
-    print(f"With city       : {with_city:,}  ({with_city/total*100:.1f}%)")
-    print(f"Without city    : {total - with_city:,}")
-    print(f"Saved → {CSV_FILE}")
+        if success_rate >= SUCCESS_THRESH:
+            notify(
+                f"Batch {batch} ✓ — Bulgaria Data",
+                f"{cities_found:,} cities added ({success_rate*100:.0f}%) | Missing: {still_missing:,} | ETA: {eta}"
+            )
+            git_push()
+            print(f"Success rate {success_rate*100:.1f}% >= 90% — auto-starting batch {batch+1}", flush=True)
+            # loop continues automatically
+        else:
+            notify(
+                f"Batch {batch} — LOW SUCCESS RATE",
+                f"Only {success_rate*100:.0f}% ({cities_found:,}/{eiks_attempted:,}). Stopping — check before continuing."
+            )
+            print(f"STOPPING: success rate {success_rate*100:.1f}% < 90%.", flush=True)
+            return
+
+    print("Pipeline complete.", flush=True)
 
 if __name__ == "__main__":
     main()

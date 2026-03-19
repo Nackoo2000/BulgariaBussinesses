@@ -12,7 +12,7 @@ Each worker runs at 1 req/10s (same rate as step3_final.py) = 180 EIKs per 30 mi
 import sys, os, json, time, requests
 
 INTER_REQ_S    = 10     # 1 request every 10s — same safe rate as original step3_final.py
-MAX_PER_WORKER = 180    # 30 min × 6 req/min = 180 EIKs per worker
+MAX_PER_WORKER = 90     # 15 min × 6 req/min = 90 EIKs per worker
 REQ_TIMEOUT    = 20     # per-request timeout in seconds
 
 SEAT_URL = "https://portal.registryagency.bg/CR/api/Deeds/{eik}/Seat"
