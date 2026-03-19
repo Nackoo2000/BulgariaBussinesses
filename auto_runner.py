@@ -328,20 +328,20 @@ def main():
         state["last_run_id"] = None
         save_state(state)
 
+        email_rate = emails_in_batch / eiks_attempted if eiks_attempted > 0 else 0
         eta = eta_string(still_missing)
 
         if success_rate >= SUCCESS_THRESH:
             notify(
                 f"Batch {batch} ✓ — Bulgaria Data",
-                f"{cities_found:,} cities added ({success_rate*100:.0f}%) | Missing: {still_missing:,} | ETA: {eta}"
+                f"Cities: {cities_found:,} ({success_rate*100:.0f}%) | Emails: {emails_in_batch:,} ({email_rate*100:.0f}%) | Missing: {still_missing:,} | ETA: {eta}"
             )
             git_push()
             print(f"Success rate {success_rate*100:.1f}% >= 90% — auto-starting batch {batch+1}", flush=True)
-            # loop continues automatically
         else:
             notify(
                 f"Batch {batch} — LOW SUCCESS RATE",
-                f"Only {success_rate*100:.0f}% ({cities_found:,}/{eiks_attempted:,}). Stopping — check before continuing."
+                f"Cities: {success_rate*100:.0f}% ({cities_found:,}/{eiks_attempted:,}) | Emails: {email_rate*100:.0f}% | Stopping."
             )
             print(f"STOPPING: success rate {success_rate*100:.1f}% < 90%.", flush=True)
             return
