@@ -6,48 +6,35 @@ Usage: python worker.py <worker_index> <total_workers> <batch_number>
   batch_number  : which batch of the full list to process (0, 1, 2, ...)
 
 Each run covers: total_workers * MAX_PER_WORKER EIKs
-Each worker runs for ~30 min at 1 req/sec = 1800 EIKs per worker per run.
+Each worker runs at 1 req/10s (same rate as step3_final.py) = 180 EIKs per 30 min.
 """
 
-import sys, os, json, time, re, requests
+import sys, os, json, time, requests
 
-INTER_REQ_S    = 1.0    # 1 request per second — VIES handles this fine
-MAX_PER_WORKER = 1800   # 30 min × 60 sec × 1 req/sec
-REQ_TIMEOUT    = 15
+INTER_REQ_S    = 10     # 1 request every 10s — same safe rate as original step3_final.py
+MAX_PER_WORKER = 180    # 30 min × 6 req/min = 180 EIKs per worker
+REQ_TIMEOUT    = 20     # per-request timeout in seconds
 
-VIES_URL = "https://ec.europa.eu/taxation_customs/vies/rest-api/ms/BG/vat/{eik}"
-
-# Address format: "ул. STREET №2 обл.REGION, гр.CITYNAME 6600"
-CITY_RE = re.compile(
-    r'(?:гр|с)\.\s*'
-    r'([А-ЯА-яёЁA-Za-z][А-ЯА-яёЁA-Za-z\s\-]{0,39}?)'
-    r'\s*\d',
-    re.UNICODE
-)
+SEAT_URL = "https://portal.registryagency.bg/CR/api/Deeds/{eik}/Seat"
 
 def fetch_city(eik, session):
-    for attempt in range(3):
-        try:
-            r = session.get(VIES_URL.format(eik=eik), timeout=REQ_TIMEOUT)
-            if r.status_code == 200:
-                data = r.json()
-                err = data.get('userError', '')
-                if err in ('MS_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'TIMEOUT'):
-                    time.sleep(10 * (attempt + 1))
-                    continue
-                if data.get('isValid'):
-                    addr = data.get('address', '') or ''
-                    m = CITY_RE.search(addr)
-                    return m.group(1).strip().upper() if m else ''
-                return ''  # not VAT registered — not an error
-            if r.status_code in (429, 500, 503):
-                time.sleep(10 * (attempt + 1))
-                continue
-            return ''
-        except Exception as e:
-            print(f"  [err] {eik}: {e}", flush=True)
-            time.sleep(5 * (attempt + 1))
-    return None  # failed all attempts
+    try:
+        r = session.get(SEAT_URL.format(eik=eik), timeout=REQ_TIMEOUT)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get('address', {}).get('settlement', '') or ''
+        if r.status_code == 429:
+            print(f"  [429] rate limit hit — backing off 60s", flush=True)
+            time.sleep(60)
+            # one retry after backoff
+            r2 = session.get(SEAT_URL.format(eik=eik), timeout=REQ_TIMEOUT)
+            if r2.status_code == 200:
+                data = r2.json()
+                return data.get('address', {}).get('settlement', '') or ''
+        return ''
+    except Exception as e:
+        print(f"  [err] {eik}: {e}", flush=True)
+        return None
 
 def main():
     if len(sys.argv) != 4:
@@ -77,7 +64,10 @@ def main():
           f"{len(worker_eiks):,} EIKs (run offset: {run_start:,})", flush=True)
 
     session = requests.Session()
-    session.headers.update({'Accept': 'application/json'})
+    session.headers.update({
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0'
+    })
 
     results = {}
     found   = 0

@@ -13,7 +13,7 @@ jobs:
   process:
     name: "Worker ${{ matrix.worker }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 55        # 30min work + 25min buffer for retries/setup/upload
+    timeout-minutes: 50        # 30min work + 20min buffer for setup/upload
     strategy:
       fail-fast: false
       matrix:
