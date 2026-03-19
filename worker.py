@@ -30,18 +30,25 @@ def handle_sigterm(signum, frame):
 
 signal.signal(signal.SIGTERM, handle_sigterm)
 
-def fetch_city(eik, session):
+def fetch_data(eik, session):
+    """Returns {"city": str, "email": str} or None on hard error."""
     try:
         r = session.get(SEAT_URL.format(eik=eik), timeout=REQ_TIMEOUT)
         if r.status_code == 200:
-            return r.json().get('address', {}).get('settlement', '') or ''
+            data     = r.json()
+            city     = data.get('address',  {}).get('settlement', '') or ''
+            email    = data.get('contacts', {}).get('eMail',      '') or ''
+            return {"city": city, "email": email.strip().lower()}
         if r.status_code == 429:
             print(f"  [429] backing off {BACKOFF_429}s", flush=True)
             time.sleep(BACKOFF_429)
             r2 = session.get(SEAT_URL.format(eik=eik), timeout=REQ_TIMEOUT)
             if r2.status_code == 200:
-                return r2.json().get('address', {}).get('settlement', '') or ''
-        return ''
+                data  = r2.json()
+                city  = data.get('address',  {}).get('settlement', '') or ''
+                email = data.get('contacts', {}).get('eMail',      '') or ''
+                return {"city": city, "email": email.strip().lower()}
+        return {"city": "", "email": ""}
     except Exception as e:
         print(f"  [err] {eik}: {e}", flush=True)
         return None
@@ -84,15 +91,17 @@ def main():
     for i, eik in enumerate(worker_eiks):
         req_start = time.time()
 
-        city = fetch_city(eik, session)
-        if city is None:
+        data = fetch_data(eik, session)
+        if data is None:
             errors += 1
-        elif city:
-            results[eik] = city
-            found += 1
+        else:
+            results[eik] = data   # {"city": ..., "email": ...}
+            if data["city"]:
+                found += 1
 
         if (i + 1) % 50 == 0 or i == len(worker_eiks) - 1:
-            print(f"  [{i+1}/{len(worker_eiks)}] found={found} errors={errors}", flush=True)
+            emails_found = sum(1 for v in results.values() if isinstance(v, dict) and v.get("email"))
+            print(f"  [{i+1}/{len(worker_eiks)}] cities={found} emails={emails_found} errors={errors}", flush=True)
 
         elapsed    = time.time() - req_start
         sleep_time = max(0, INTER_REQ_S - elapsed)

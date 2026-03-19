@@ -159,12 +159,41 @@ def save_csv(companies, fieldnames):
             writer.writerow(companies[eik])
     os.replace(tmp, CSV_FILE)
 
-def apply_cities(companies, city_map):
+def apply_cities(companies, fieldnames, city_map):
+    """
+    city_map values can be:
+      - str  (old format): just a city name
+      - dict (new format): {"city": ..., "email": ...}
+    Adds Email and Email Verified columns to CSV if not already present.
+    """
+    # Ensure Email columns exist
+    if "Email" not in fieldnames:
+        fieldnames.append("Email")
+    if "Email Verified" not in fieldnames:
+        fieldnames.append("Email Verified")
+    for row in companies.values():
+        row.setdefault("Email", "")
+        row.setdefault("Email Verified", "")
+
     applied = 0
-    for eik, city in city_map.items():
-        if eik in companies and not companies[eik].get("Registered Address", "").strip():
-            companies[eik]["Registered Address"] = city
+    for eik, value in city_map.items():
+        if eik not in companies:
+            continue
+        row = companies[eik]
+
+        if isinstance(value, dict):
+            city  = value.get("city",  "") or ""
+            email = value.get("email", "") or ""
+        else:
+            city  = value or ""
+            email = ""
+
+        if city and not row.get("Registered Address", "").strip():
+            row["Registered Address"] = city
             applied += 1
+        if email and not row.get("Email", "").strip():
+            row["Email"] = email
+
     return applied
 
 def update_done(city_map):
@@ -287,12 +316,13 @@ def main():
 
         # Apply to CSV
         companies, fieldnames = load_csv()
-        applied = apply_cities(companies, city_map)
+        applied = apply_cities(companies, fieldnames, city_map)
         save_csv(companies, fieldnames)
         update_done(city_map)
         still_missing = regenerate_missing()
 
-        print(f"Applied {applied:,} cities. Still missing: {still_missing:,}", flush=True)
+        emails_in_batch = sum(1 for v in city_map.values() if isinstance(v, dict) and v.get("email"))
+        print(f"Applied {applied:,} cities, {emails_in_batch:,} emails. Still missing: {still_missing:,}", flush=True)
 
         state["next_batch"] = batch + 1
         state["last_run_id"] = None
