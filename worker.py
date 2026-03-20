@@ -7,10 +7,10 @@ Saves partial results on SIGTERM (timeout/cancel) so no work is lost.
 
 import sys, os, json, time, signal, requests
 
-INTER_REQ_S    = 7      # 1 request every 7s — ~8.5 req/min, under rate limit ceiling
-MAX_PER_WORKER = 180    # ~21 min × ~8.5 req/min = 180 EIKs per worker
+INTER_REQ_S    = 10     # 1 request every 10s — proven safe rate
+MAX_PER_WORKER = 90     # 15 min × 6 req/min = 90 EIKs per worker
 REQ_TIMEOUT    = 20
-BACKOFF_429    = 30     # seconds to wait after a 429 (reduced from 60)
+BACKOFF_429    = 30     # seconds to wait after a 429
 
 SEAT_URL = "https://portal.registryagency.bg/CR/api/Deeds/{eik}/Seat"
 
@@ -23,7 +23,6 @@ def save_results():
         json.dump(results, f, ensure_ascii=False)
 
 def handle_sigterm(signum, frame):
-    """Called when GitHub Actions cancels or times out the job."""
     print(f"\n[SIGTERM] Saving {len(results)} partial results to {out_file}", flush=True)
     save_results()
     sys.exit(0)
@@ -79,7 +78,7 @@ def main():
     worker_eiks = run_eiks[worker_idx::total_workers][:MAX_PER_WORKER]
 
     print(f"Worker {worker_idx}/{total_workers} | Batch {batch_num} | "
-          f"{len(worker_eiks):,} EIKs (offset {run_start:,})", flush=True)
+          f"{len(worker_eiks):,} EIKs", flush=True)
 
     session = requests.Session()
     session.headers.update({'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0'})
@@ -94,7 +93,7 @@ def main():
         if data is None:
             errors += 1
         else:
-            results[eik] = data   # {"city": ..., "email": ...}
+            results[eik] = data
             if data["city"]:
                 found += 1
 
