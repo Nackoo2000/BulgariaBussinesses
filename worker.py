@@ -7,8 +7,8 @@ Saves partial results on SIGTERM (timeout/cancel) so no work is lost.
 
 import sys, os, json, time, signal, requests
 
-INTER_REQ_S    = 10     # 1 request every 10s — same safe rate as step3_final.py
-MAX_PER_WORKER = 90     # 15 min × 6 req/min = 90 EIKs per worker
+INTER_REQ_S    = 7      # 1 request every 7s — ~8.5 req/min, under rate limit ceiling
+MAX_PER_WORKER = 180    # ~21 min × ~8.5 req/min = 180 EIKs per worker
 REQ_TIMEOUT    = 20
 BACKOFF_429    = 30     # seconds to wait after a 429 (reduced from 60)
 

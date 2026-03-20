@@ -31,7 +31,7 @@ POLL_INTERVAL   = 60       # seconds between status checks
 MAX_WAIT_HOURS  = 1        # max wait per batch before timeout
 TOTAL_BATCHES   = 300      # safe upper bound
 WORKERS         = 20
-MAX_PER_WORKER  = 90       # must match worker.py
+MAX_PER_WORKER  = 180      # must match worker.py
 EIKS_PER_BATCH  = WORKERS * MAX_PER_WORKER   # 1,800
 SUCCESS_THRESH  = 0.90     # auto-continue only if >= 90% of EIKs got a city
 
