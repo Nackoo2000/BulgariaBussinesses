@@ -69,8 +69,7 @@ def main():
         all_eiks = [line.strip() for line in f if line.strip()]
 
     per_run   = total_workers * MAX_PER_WORKER
-    run_start = batch_num * per_run
-    run_eiks  = all_eiks[run_start : run_start + per_run]
+    run_eiks  = all_eiks[:per_run]   # always start from top — missing_eiks.txt is pruned after each batch
 
     if not run_eiks:
         print(f"Worker {worker_idx}: nothing to do (batch {batch_num} is empty)")
