@@ -301,9 +301,12 @@ def main():
             notify("Bulgaria Data — ERROR", f"Batch {batch}: could not download artifact.")
             return
 
-        cities_found  = len(city_map)
-        eiks_attempted = min(EIKS_PER_BATCH, missing_count)
-        success_rate  = cities_found / eiks_attempted if eiks_attempted > 0 else 0
+        eiks_attempted = len(city_map)  # actual EIKs workers processed
+        cities_found   = sum(
+            1 for v in city_map.values()
+            if (isinstance(v, dict) and v.get("city")) or (isinstance(v, str) and v)
+        )
+        success_rate   = cities_found / eiks_attempted if eiks_attempted > 0 else 0
 
         print(f"Cities found: {cities_found:,} / {eiks_attempted:,} ({success_rate*100:.1f}%)", flush=True)
 
