@@ -167,13 +167,13 @@ def apply_cities(companies, fieldnames, city_map):
     Adds Email and Email Verified columns to CSV if not already present.
     """
     # Ensure Email columns exist
-    if "Email" not in fieldnames:
-        fieldnames.append("Email")
-    if "Email Verified" not in fieldnames:
-        fieldnames.append("Email Verified")
+    for col in ("Email", "Email Verified", "Email Scraped"):
+        if col not in fieldnames:
+            fieldnames.append(col)
     for row in companies.values():
         row.setdefault("Email", "")
         row.setdefault("Email Verified", "")
+        row.setdefault("Email Scraped", "N")
 
     applied = 0
     for eik, value in city_map.items():
@@ -193,6 +193,7 @@ def apply_cities(companies, fieldnames, city_map):
             applied += 1
         if email and not row.get("Email", "").strip():
             row["Email"] = email
+        row["Email Scraped"] = "Y"  # mark as scraped regardless of result
 
     return applied
 
