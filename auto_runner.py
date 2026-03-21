@@ -75,19 +75,37 @@ def save_state(state):
 
 # ── GitHub API ─────────────────────────────────────────────────────────────
 
-def api_get(path):
-    r = requests.get(f"{API}{path}", headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    return r.json()
+def api_get(path, retries=5):
+    for attempt in range(retries):
+        try:
+            r = requests.get(f"{API}{path}", headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < retries - 1:
+                wait = 30 * (attempt + 1)
+                print(f"  [net] {e.__class__.__name__}, retry {attempt+1}/{retries} in {wait}s", flush=True)
+                time.sleep(wait)
+            else:
+                raise
 
-def trigger_workflow(batch_number):
-    r = requests.post(
-        f"{API}/repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches",
-        headers=HEADERS,
-        json={"ref": BRANCH, "inputs": {"batch_number": str(batch_number)}},
-        timeout=30,
-    )
-    return r.status_code == 204
+def trigger_workflow(batch_number, retries=5):
+    for attempt in range(retries):
+        try:
+            r = requests.post(
+                f"{API}/repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches",
+                headers=HEADERS,
+                json={"ref": BRANCH, "inputs": {"batch_number": str(batch_number)}},
+                timeout=30,
+            )
+            return r.status_code == 204
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < retries - 1:
+                wait = 30 * (attempt + 1)
+                print(f"  [net] trigger: {e.__class__.__name__}, retry {attempt+1}/{retries} in {wait}s", flush=True)
+                time.sleep(wait)
+            else:
+                return False
 
 def get_latest_run_id():
     data = api_get(f"/repos/{REPO}/actions/runs?per_page=1")
@@ -123,9 +141,19 @@ def download_artifact(run_id, batch_number):
             city_map.update(fetch_zip(a["archive_download_url"]))
     return city_map
 
-def fetch_zip(url):
-    r = requests.get(url, headers=HEADERS, timeout=120)
-    r.raise_for_status()
+def fetch_zip(url, retries=5):
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=120)
+            r.raise_for_status()
+            break
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < retries - 1:
+                wait = 30 * (attempt + 1)
+                print(f"  [net] fetch_zip: {e.__class__.__name__}, retry {attempt+1}/{retries} in {wait}s", flush=True)
+                time.sleep(wait)
+            else:
+                raise
     city_map = {}
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         for name in zf.namelist():
