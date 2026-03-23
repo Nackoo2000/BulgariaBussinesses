@@ -242,7 +242,7 @@ def regenerate_missing():
     missing = []
     with open(CSV_FILE, encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
-            if not row.get("Registered Address", "").strip() and row["EIK"] not in done:
+            if row.get("Email Scraped", "") != "Y" and row["EIK"] not in done:
                 missing.append(row["EIK"])
     with open(MISSING_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(missing))
@@ -282,9 +282,9 @@ def eta_string(still_missing):
 def main():
     state = load_state()
     print("=" * 60, flush=True)
-    print("AUTO RUNNER — 15-min EPZEU batches", flush=True)
+    print("AUTO RUNNER — EMAIL SCRAPING PASS", flush=True)
     print(f"Starting at batch {state['next_batch']}", flush=True)
-    print("Stop rules: 0 cities found OR success rate < 90%", flush=True)
+    print("Stop rules: 0 EIKs to scrape OR success rate < 90%", flush=True)
     print("=" * 60, flush=True)
 
     while state["next_batch"] < TOTAL_BATCHES:
@@ -294,12 +294,12 @@ def main():
 
         companies, fieldnames = load_csv()
         total         = len(companies)
-        with_city     = sum(1 for r in companies.values() if r.get("Registered Address", "").strip())
-        missing_count = total - with_city
-        print(f"Before: {with_city:,} with city | {missing_count:,} missing", flush=True)
+        scraped_count = sum(1 for r in companies.values() if r.get("Email Scraped", "") == "Y")
+        missing_count = total - scraped_count
+        print(f"Before: {scraped_count:,} scraped | {missing_count:,} remaining", flush=True)
 
         if missing_count == 0:
-            notify("Bulgaria Data — COMPLETE", "All companies have a city!")
+            notify("Bulgaria Data — COMPLETE", "All companies scraped for email!")
             print("All done!", flush=True)
             break
 
