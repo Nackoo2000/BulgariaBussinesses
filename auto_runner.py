@@ -249,14 +249,26 @@ def regenerate_missing():
     return len(missing)
 
 def git_push():
-    for cmd in [
-        ["git", "-C", GH_DIR, "add", "missing_eiks.txt", "runner_state.json"],
-        ["git", "-C", GH_DIR, "commit", "-m", "Update after batch merge"],
-        ["git", "-C", GH_DIR, "push"],
-    ]:
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0 and "nothing to commit" not in r.stdout:
-            print(f"  git: {r.stderr.strip()[:150]}", flush=True)
+    subprocess.run(["git", "-C", GH_DIR, "add", "missing_eiks.txt", "runner_state.json"],
+                   capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", GH_DIR, "commit", "-m", "Update after batch merge"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        combined = r.stdout + r.stderr
+        if "nothing to commit" in combined:
+            return True
+        print(f"  git commit failed: {combined.strip()[:200]}", flush=True)
+        return False
+    # Push with retry (pull --rebase if remote diverged)
+    for attempt in range(3):
+        r = subprocess.run(["git", "-C", GH_DIR, "push"], capture_output=True, text=True)
+        if r.returncode == 0:
+            return True
+        print(f"  git push attempt {attempt+1} failed: {r.stderr.strip()[:200]}", flush=True)
+        subprocess.run(["git", "-C", GH_DIR, "pull", "--rebase"], capture_output=True, text=True)
+        time.sleep(5)
+    print("  ERROR: git push failed after 3 attempts!", flush=True)
+    return False
 
 def eta_string(still_missing):
     batches_left = math.ceil(still_missing / EIKS_PER_BATCH)
@@ -368,7 +380,10 @@ def main():
                 f"Batch {batch} ✓ — Bulgaria Data",
                 f"Cities: {cities_found:,} ({success_rate*100:.0f}%) | Emails: {emails_in_batch:,} ({email_rate*100:.0f}%) | Missing: {still_missing:,} | ETA: {eta}"
             )
-            git_push()
+            if not git_push():
+                notify("Bulgaria Data — GIT PUSH FAILED", f"Batch {batch}: git push failed. Workers will use stale data. Fix and restart.")
+                print("STOPPING: git push failed — workers would use stale missing_eiks.txt", flush=True)
+                return
             print(f"Success rate {success_rate*100:.1f}% >= 90% — auto-starting batch {batch+1}", flush=True)
         else:
             notify(
