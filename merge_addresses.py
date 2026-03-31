@@ -65,14 +65,16 @@ for rfile in sorted(result_files):
     streets = sum(1 for v in batch.values() if v.get("street"))
     print(f"  {os.path.basename(rfile)}: {len(batch):,} EIKs, {streets:,} with street")
 
-total_queried = len(addr_map)
+total_queried     = len(addr_map)
 total_with_street = sum(1 for v in addr_map.values() if v.get("street"))
-success_rate = total_with_street / total_queried if total_queried > 0 else 0
+api_responded     = sum(1 for v in addr_map.values() if v.get("street") or v.get("settlement"))
+success_rate      = api_responded / total_queried if total_queried > 0 else 0
 
-print(f"\nTotal queried: {total_queried:,}")
-print(f"With street:   {total_with_street:,} ({success_rate*100:.1f}%)")
+print(f"\nTotal queried:   {total_queried:,}")
+print(f"API responded:   {api_responded:,} ({success_rate*100:.1f}%)")
+print(f"With street:     {total_with_street:,} ({total_with_street/total_queried*100:.1f}%) — rest have no street in registry")
 
-# ── Abort if success rate too low ─────────────────────────────────────────────
+# ── Abort if API success rate too low ─────────────────────────────────────────
 if success_rate < SUCCESS_THRESHOLD:
     msg = (f"ABORTED — only {success_rate*100:.1f}% of EIKs returned a street "
            f"(threshold {SUCCESS_THRESHOLD*100:.0f}%). Check for API errors.")

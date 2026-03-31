@@ -351,20 +351,23 @@ def main():
 
         eiks_attempted  = len(addr_map)
         streets_found   = sum(1 for v in addr_map.values() if v.get("street"))
-        success_rate    = streets_found / eiks_attempted if eiks_attempted > 0 else 0
+        api_responded   = sum(1 for v in addr_map.values() if v.get("street") or v.get("settlement"))
+        success_rate    = api_responded / eiks_attempted if eiks_attempted > 0 else 0
+        street_rate     = streets_found / eiks_attempted if eiks_attempted > 0 else 0
 
-        log(f"Streets found: {streets_found:,} / {eiks_attempted:,} ({success_rate*100:.1f}%)")
+        log(f"API responded: {api_responded:,} / {eiks_attempted:,} ({success_rate*100:.1f}%)")
+        log(f"With street:   {streets_found:,} / {eiks_attempted:,} ({street_rate*100:.1f}%) — rest have no street in registry")
 
-        if streets_found == 0:
+        if api_responded == 0:
             notify("BRRA Runner — STOPPED",
-                   f"Batch {batch}: 0 streets found. Something is broken — check workers.")
-            log("STOPPING: 0 streets found.")
+                   f"Batch {batch}: 0 API responses. Something is broken — check workers.")
+            log("STOPPING: 0 API responses.")
             return
 
         if success_rate < SUCCESS_THRESH:
             notify("BRRA Runner — LOW SUCCESS",
-                   f"Batch {batch}: {success_rate*100:.1f}% streets (threshold 95%). Stopping.")
-            log(f"STOPPING: success rate {success_rate*100:.1f}% < 95%.")
+                   f"Batch {batch}: only {success_rate*100:.1f}% API responses (threshold 95%). Stopping.")
+            log(f"STOPPING: API success rate {success_rate*100:.1f}% < 95%.")
             return
 
         # Apply to CSV
