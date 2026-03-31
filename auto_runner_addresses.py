@@ -388,7 +388,8 @@ def main():
 
         notify(
             f"BRRA Batch {batch} OK",
-            f"Batch {success_rate*100:.0f}% | Scraped: {total_done:,}/{total:,} | "
+            f"API: {success_rate*100:.0f}% | Streets: {street_rate*100:.0f}% | "
+            f"Scraped: {total_done:,}/{total:,} | "
             f"Address: {with_addr:,}/{total:,} ({overall_pct:.1f}%) | "
             f"Left: {still_after:,} ~{eta}"
         )
